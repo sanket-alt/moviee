@@ -1,6 +1,7 @@
-// Configuration & State Engine
 const TMDB_API_KEY = '1cf50e6248dc270629e802686245c2c8';
 const IMG_BASE_URL = 'https://image.tmdb.org/t/p/w500';
+// Point this to your active Node backend URL (local or cloud-hosted base)
+const BACKEND_API_BASE = 'http://localhost:5000/api/extract';
 
 let currentPage = 1;
 let isFetching = false;
@@ -8,28 +9,29 @@ let currentMode = 'trending';
 let mediaType = 'movie'; 
 let currentSearchQuery = '';
 let currentTvId = null;
+let hlsInstance = null;
 
-// Core DOM Elements
+// DOM Layout Hooks
 const grid = document.getElementById('media-grid');
 const loading = document.getElementById('loading');
 const sectionTitle = document.querySelector('#section-title h2');
 
-// Player DOM Elements
+// Player Structural Elements
 const modal = document.getElementById('player-modal');
-const iframe = document.getElementById('vidking-iframe');
+const videoPlayer = document.getElementById('native-player');
+const playerLoader = document.getElementById('player-loader');
 const closeBtn = document.getElementById('close-player');
 const tvControls = document.getElementById('tv-controls');
 const seasonSelect = document.getElementById('season-select');
 const episodeSelect = document.getElementById('episode-select');
 
-// Navigation DOM Elements
+// Navigation Connectors
 const btnTrending = document.getElementById('btn-trending');
 const btnTop = document.getElementById('btn-top');
 const searchBar = document.getElementById('search-bar');
 const toggleMovie = document.getElementById('toggle-movie');
 const toggleTv = document.getElementById('toggle-tv');
 
-// 1. Primary Fetch Engine
 async function fetchMedia() {
     if (isFetching) return;
     isFetching = true;
@@ -51,27 +53,23 @@ async function fetchMedia() {
     try {
         const response = await fetch(url);
         const data = await response.json();
-
         if (data.results.length === 0 && currentPage === 1) {
-            grid.innerHTML = '<p style="color: #888; grid-column: 1 / -1; text-align: center;">No results found.</p>';
+            grid.innerHTML = '<p style="color: #808080; grid-column: 1 / -1; text-align: center;">No results found.</p>';
         } else {
             renderMedia(data.results);
             currentPage++;
         }
     } catch (error) {
-        console.error("Database fetch failed:", error);
+        console.error("Database connection failure:", error);
     } finally {
         isFetching = false;
         loading.style.display = 'none';
     }
 }
 
-// 2. Render Cards
 function renderMedia(items) {
     items.forEach(item => {
         if (!item.poster_path) return; 
-
-        // Safely extract the title string regardless of endpoint structure
         const displayTitle = item.title || item.name;
 
         const card = document.createElement('div');
@@ -80,31 +78,25 @@ function renderMedia(items) {
             <img src="${IMG_BASE_URL + item.poster_path}" alt="${displayTitle}" loading="lazy">
             <div class="info">
                 <h3>${displayTitle}</h3>
-                <div class="rating">★ ${item.vote_average.toFixed(1)}</div>
+                <div class="rating">Match: ${(item.vote_average * 10).toFixed(0)}%</div>
             </div>
         `;
-
         card.addEventListener('click', () => openPlayer(item.id));
         grid.appendChild(card);
     });
 }
 
-// 3. Grid Reset Logic
 function resetGridAndFetch(newMode) {
     currentMode = newMode;
     currentPage = 1;
     grid.innerHTML = '';
-
-    // Updates UI H2 Text Dynamically
     const typeText = mediaType === 'movie' ? 'Movies' : 'TV Shows';
     if (currentMode === 'trending') sectionTitle.innerText = `Trending ${typeText}`;
     if (currentMode === 'top_rated') sectionTitle.innerText = `Top Rated ${typeText}`;
     if (currentMode === 'search') sectionTitle.innerText = `Search Results: "${currentSearchQuery}"`;
-
     fetchMedia();
 }
 
-// 4. Navigation Event Handlers
 toggleMovie.addEventListener('click', () => {
     if (mediaType === 'movie') return; 
     mediaType = 'movie';
@@ -135,12 +127,10 @@ btnTop.addEventListener('click', () => {
     resetGridAndFetch('top_rated');
 });
 
-// 5. Search Execution (Debounced)
 let searchTimeout;
 searchBar.addEventListener('input', (e) => {
     clearTimeout(searchTimeout);
     const query = e.target.value.trim();
-
     searchTimeout = setTimeout(() => {
         if (query.length > 0) {
             btnTrending.classList.remove('active');
@@ -154,28 +144,99 @@ searchBar.addEventListener('input', (e) => {
     }, 500);
 });
 
-// 6. Player Injection & Routing
+// 1. Stream Engine Initialization 
+function initializeVideoSource(streamUrl) {
+    // Clear old instances out of memory before executing new assignments
+    if (hlsInstance) {
+        hlsInstance.destroy();
+        hlsInstance = null;
+    }
+
+    // Monitor engine startup performance to clean out visual placeholder frames
+    videoPlayer.onplaying = () => {
+        playerLoader.style.display = 'none';
+    };
+
+    // Scenario A: Browser handles HLS playlists natively (Apple Safari platforms)
+    if (videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
+        videoPlayer.src = streamUrl;
+    } 
+    // Scenario B: Handle playback engine through HLS.js mapping (Chrome, Firefox, Edge)
+    else if (Hls.isSupported()) {
+        hlsInstance = new Hls({
+            maxBufferLength: 30, // Max look-ahead buffering frame sizes
+            maxMaxBufferLength: 600,
+            enableWorker: true, // Use background web workers to keep UI fluid
+            lowLatencyMode: true
+        });
+        hlsInstance.loadSource(streamUrl);
+        hlsInstance.attachMedia(videoPlayer);
+        
+        hlsInstance.on(Hls.Events.ERROR, function (event, data) {
+            if (data.fatal) {
+                switch (data.type) {
+                    case Hls.ErrorTypes.NETWORK_ERROR:
+                        console.log('Network issues encountered. Attempting player recovery loops...');
+                        hlsInstance.startLoad();
+                        break;
+                    case Hls.ErrorTypes.MEDIA_ERROR:
+                        console.log('Media rendering fault. Forcing stream recovery target paths...');
+                        hlsInstance.recoverMediaError();
+                        break;
+                    default:
+                        destroyStreamSession();
+                        break;
+                }
+            }
+        });
+    } else {
+        alert("Your web platform environment lacks required streaming dependencies.");
+    }
+}
+
+// 2. Extractor Callout Pipeline
+async function loadVideoSource(type, id, season = '', episode = '') {
+    playerLoader.style.display = 'flex';
+    playerLoader.querySelector('p').innerText = "Securing Stream Connection...";
+    
+    let requestUrl = `${BACKEND_API_BASE}?type=${type}&id=${id}`;
+    if (type === 'tv') {
+        requestUrl += `&season=${season}&episode=${episode}`;
+    }
+
+    try {
+        const response = await fetch(requestUrl);
+        const data = await response.json();
+
+        if (data.success && data.streamUrl) {
+            initializeVideoSource(data.streamUrl);
+        } else {
+            playerLoader.querySelector('p').innerText = "Streaming Source Generation Failed. Switch Content.";
+        }
+    } catch (err) {
+        console.error("Backend connection failure:", err);
+        playerLoader.querySelector('p').innerText = "Backend extraction infrastructure offline.";
+    }
+}
+
 async function openPlayer(tmdbId) {
     modal.style.display = 'flex';
     document.body.style.overflow = 'hidden';
 
     if (mediaType === 'movie') {
         tvControls.style.display = 'none'; 
-        iframe.src = `https://www.vidking.net/embed/movie/${tmdbId}?autoPlay=true`;
+        await loadVideoSource('movie', tmdbId);
     } else {
         tvControls.style.display = 'flex'; 
         currentTvId = tmdbId; 
-        iframe.src = ''; 
         await loadSeasons(tmdbId);
     }
 }
 
-// 7. TV Season & Episode API Pipeline
 async function loadSeasons(tmdbId) {
     try {
         const response = await fetch(`https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${TMDB_API_KEY}`);
         const data = await response.json();
-
         seasonSelect.innerHTML = '';
 
         data.seasons.forEach(season => {
@@ -191,7 +252,7 @@ async function loadSeasons(tmdbId) {
             await loadEpisodes(tmdbId, seasonSelect.value);
         }
     } catch (error) {
-        console.error("Seasons load failed:", error);
+        console.error("Seasons metadata acquisition failed:", error);
     }
 }
 
@@ -199,7 +260,6 @@ async function loadEpisodes(tmdbId, seasonNumber) {
     try {
         const response = await fetch(`https://api.themoviedb.org/3/tv/${tmdbId}/season/${seasonNumber}?api_key=${TMDB_API_KEY}`);
         const data = await response.json();
-
         episodeSelect.innerHTML = '';
 
         data.episodes.forEach(episode => {
@@ -210,10 +270,10 @@ async function loadEpisodes(tmdbId, seasonNumber) {
         });
 
         if (episodeSelect.options.length > 0) {
-            iframe.src = `https://www.vidking.net/embed/tv/${tmdbId}/${seasonNumber}/${episodeSelect.value}?autoPlay=true`;
+            await loadVideoSource('tv', tmdbId, seasonNumber, episodeSelect.value);
         }
     } catch (error) {
-        console.error("Episodes load failed:", error);
+        console.error("Episode metadata tracking failed:", error);
     }
 }
 
@@ -222,18 +282,23 @@ seasonSelect.addEventListener('change', (e) => {
 });
 
 episodeSelect.addEventListener('change', (e) => {
-    const selectedSeason = seasonSelect.value;
-    iframe.src = `https://www.vidking.net/embed/tv/${currentTvId}/${selectedSeason}/${e.target.value}?autoPlay=true`;
+    loadEpisodes(currentTvId, seasonSelect.value);
 });
 
-// 8. Close Functions
-closeBtn.addEventListener('click', () => {
+function destroyStreamSession() {
     modal.style.display = 'none';
-    iframe.src = ''; 
     document.body.style.overflow = 'auto';
-});
+    videoPlayer.pause();
+    videoPlayer.removeAttribute('src'); 
+    videoPlayer.load();
+    if (hlsInstance) {
+        hlsInstance.destroy();
+        hlsInstance = null;
+    }
+}
 
-// 9. Infinite Scroll Activation
+closeBtn.addEventListener('click', destroyStreamSession);
+
 window.addEventListener('scroll', () => {
     const { scrollTop, scrollHeight, clientHeight } = document.documentElement;
     if (scrollTop + clientHeight >= scrollHeight - 150) {
@@ -241,5 +306,4 @@ window.addEventListener('scroll', () => {
     }
 });
 
-// Execute framework entry point on load
 resetGridAndFetch('trending');
