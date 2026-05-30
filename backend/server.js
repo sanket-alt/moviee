@@ -5,111 +5,117 @@ const puppeteer = require('puppeteer');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Enable Cross-Origin Resource Sharing so your frontend can call this backend
 app.use(cors());
 app.use(express.json());
 
 app.get('/api/extract', async (req, res) => {
     const { type, id, season, episode } = req.query;
+    console.log(`\n[API REQUEST] Received extraction request for Type: ${type}, ID: ${id}`);
 
     if (!type || !id) {
-        return res.status(400).json({ error: 'Missing parameters: type and id are required.' });
+        console.log(`[API ERROR] Missing critical parameters.`);
+        return res.status(400).json({ error: 'Missing parameters.' });
     }
 
-    // Reconstruct the provider URL based on media type
-    let targetUrl = '';
-    if (type === 'movie') {
-        targetUrl = `https://www.vidking.net/embed/movie/${id}`;
-    } else if (type === 'tv') {
-        if (!season || !episode) {
-            return res.status(400).json({ error: 'TV shows require season and episode parameters.' });
-        }
-        targetUrl = `https://www.vidking.net/embed/tv/${id}/${season}/${episode}`;
-    }
+    let targetUrl = type === 'movie' 
+        ? `https://www.vidking.net/embed/movie/${id}`
+        : `https://www.vidking.net/embed/tv/${id}/${season}/${episode}`;
 
+    console.log(`[EXTRACTOR] Target extraction URL constructed: ${targetUrl}`);
     let browser = null;
 
     try {
-        // Essential performance flags for running Puppeteer inside hosting environments (Docker, Render, AWS)
+        console.log(`[PUPPETEER] Launching headless chromium instance...`);
         browser = await puppeteer.launch({
-            headless: true,
-            executablePath: '/usr/bin/google-chrome', // Specifically for Render
+            headless: true, // Set to false locally if you want to watch the automated browser work!
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--no-first-run',
-                '--no-zygote',
-                '--single-process',
-                '--disable-gpu'
+                '--disable-blink-features=AutomationControlled' // Helps bypass basic anti-bot scripts
             ]
         });
 
         const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
         
-        // Spoof user-agent so the provider doesn't treat the headless instance as an automated bot
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        // Overwrite the webdriver property to mask automated execution
+        await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        });
 
-        // Enable request interception to catch the stream link
+        console.log(`[PUPPETEER] Intercepting network layers...`);
         await page.setRequestInterception(true);
-
         let streamUrl = null;
 
         page.on('request', (request) => {
             const url = request.url();
             
-            // Look for HLS streaming files (.m3u8) or direct video formats (.mp4)
-            if (url.includes('.m3u8') || url.includes('.mp4') || url.includes('master.m3u8')) {
-                // Ignore standard tracking/analytics files that might contain the extension string safely
-                if (!url.includes('analytics') && !url.includes('telemetry')) {
-                    streamUrl = url;
-                }
+            // Log whenever a streaming file format flies past the network log
+            if (url.includes('.m3u8') || url.includes('.mp4') || url.includes('master')) {
+                console.log(`[NETWORK MATCH] Potential stream source intercepted: ${url.substring(0, 60)}...`);
+                streamUrl = url;
             }
             
-            // Block heavy graphical assets and third-party ad networks early to save bandwidth/speed
             const resourceType = request.resourceType();
-            if (['image', 'stylesheet', 'font', 'media'].includes(resourceType) && !url.includes('.m3u8')) {
+            if (['image', 'font', 'stylesheet'].includes(resourceType) && !url.includes('.m3u8')) {
                 request.abort();
             } else {
                 request.continue();
             }
         });
 
-        // Navigate to the target page. 
-        // networkidle2 means execution waits until there are no more than 2 active network connections left.
-        await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        console.log(`[PUPPETEER] Navigating to target site...`);
+        // Use a 20-second timeout for navigation to prevent permanent hanging
+        await page.goto(targetUrl, { Laurel: true, waitUntil: 'domcontentloaded', timeout: 20000 });
+        console.log(`[PUPPETEER] DOM content loaded successfully.`);
 
-        // If the play action requires a simulated click to kick off the video execution scripts:
-        const playButtonSelectors = ['#play', '.play-btn', '.vjs-big-play-button', 'video'];
-        for (const selector of playButtonSelectors) {
-            try {
-                if (await page.$(selector) !== null) {
-                    await page.click(selector);
-                    // Short wait block to let network activities manifest post-click
-                    await new Promise(resolve => setTimeout(resolve, 1500)); 
+        // Give the page script execution 3 seconds to auto-unpack sources naturally
+        await new Promise(resolve => setTimeout(resolve, 3000));
+
+        // If no stream URL was captured natively, look for video player components to force execution
+        if (!streamUrl) {
+            console.log(`[PUPPETEER] Stream not found naturally. Searching for play activation anchors...`);
+            const playSelectors = ['#play', '.play-btn', '.vjs-big-play-button', 'video', 'canvas'];
+            
+            for (const selector of playSelectors) {
+                try {
+                    const el = await page.$(selector);
+                    if (el !== null) {
+                        console.log(`[PUPPETEER] Found actionable selector [${selector}]. Simulating click event...`);
+                        await page.click(selector);
+                        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for network to react
+                    }
+                } catch (e) {
+                    // Fail silently to check next structural element selector
                 }
-            } catch (e) {
-                // Fail silently and try the next selector point
+                if (streamUrl) {
+                    console.log(`[PUPPETEER] Success! Stream URL caught after click event.`);
+                    break;
+                }
             }
-            if (streamUrl) break;
         }
 
         await browser.close();
+        console.log(`[PUPPETEER] Browser instance closed safely.`);
 
         if (streamUrl) {
+            console.log(`[API RESPONSE] Sending streaming link back to frontend.`);
             return res.json({ success: true, streamUrl: streamUrl });
         } else {
-            return res.status(404).json({ success: false, error: 'Streaming source URL could not be extracted.' });
+            console.log(`[API ERROR] Page loaded completely but no video resource was found.`);
+            return res.status(404).json({ success: false, error: 'Source not found.' });
         }
 
     } catch (error) {
+        console.log(`[CRITICAL EXCEPTION] Engine failure: ${error.message}`);
         if (browser) await browser.close();
-        console.error('Extraction Error:', error.message);
-        return res.status(500).json({ success: false, error: 'Internal extraction timeout or execution crash.' });
+        return res.status(500).json({ success: false, error: error.message });
     }
 });
 
 app.listen(PORT, () => {
-    console.log(`Extraction engine active on port ${PORT}`);
+    console.log(`==================================================`);
+    console.log(`  Extraction telemetry console active on Port ${PORT}`);
+    console.log(`==================================================`);
 });
