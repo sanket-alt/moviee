@@ -1,7 +1,7 @@
 const TMDB_API_KEY = '1cf50e6248dc270629e802686245c2c8';
 const IMG_BASE_URL = 'https://image.tmdb.org/t/p/w500';
 // Point this to your active Node backend URL (local or cloud-hosted base)
-const BACKEND_API_BASE = 'http://localhost:5000/api/extract';
+const BACKEND_API_BASE = 'https://moviee-stbo.onrender.com';
 
 let currentPage = 1;
 let isFetching = false;
