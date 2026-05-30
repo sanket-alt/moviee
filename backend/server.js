@@ -27,12 +27,12 @@ app.get('/api/extract', async (req, res) => {
     try {
         console.log(`[PUPPETEER] Launching headless chromium instance...`);
         browser = await puppeteer.launch({
-            headless: true, // Set to false locally if you want to watch the automated browser work!
+            headless: true, 
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                '--disable-blink-features=AutomationControlled' // Helps bypass basic anti-bot scripts
+                '--disable-blink-features=AutomationControlled'
             ]
         });
 
