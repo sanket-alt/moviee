@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KwazyCupcakes Streaming</title>
     <link rel="stylesheet" href="style.css">
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
 <body>
     <header>
@@ -37,22 +36,15 @@
 
     <div id="player-modal" class="modal">
         <div class="modal-content">
-            
-            <div class="close-container" id="close-player">
-                <span class="back-arrow">&larr;</span> Back to Browse
-            </div>
+            <span class="close-btn" id="close-player">&times;</span>
 
             <div id="tv-controls" class="tv-controls">
                 <select id="season-select" class="dropdown"></select>
                 <select id="episode-select" class="dropdown"></select>
             </div>
 
-            <div class="video-container">
-                <video id="native-player" controls autoplay crossorigin="anonymous"></video>
-                <div id="player-loader" class="player-loader-overlay">
-                    <div class="netflix-spinner"></div>
-                    <p>Securing Stream Connection...</p>
-                </div>
+            <div class="iframe-container">
+                <iframe id="vidking-iframe" frameborder="0" allowfullscreen></iframe>
             </div>
         </div>
     </div>
