@@ -53,7 +53,7 @@ async function fetchMedia() {
         const data = await response.json();
 
         if (data.results.length === 0 && currentPage === 1) {
-            grid.innerHTML = '<p style="color: #808080; grid-column: 1 / -1; text-align: center;">No results found.</p>';
+            grid.innerHTML = '<p style="color: #888; grid-column: 1 / -1; text-align: center;">No results found.</p>';
         } else {
             renderMedia(data.results);
             currentPage++;
@@ -80,7 +80,7 @@ function renderMedia(items) {
             <img src="${IMG_BASE_URL + item.poster_path}" alt="${displayTitle}" loading="lazy">
             <div class="info">
                 <h3>${displayTitle}</h3>
-                <div class="rating">User Rating: ${(item.vote_average * 10).toFixed(0)}%</div>
+                <div class="rating">★ ${item.vote_average.toFixed(1)}</div>
             </div>
         `;
 
