@@ -33,6 +33,7 @@ app.get('/api/extract', async (req, res) => {
         // Essential performance flags for running Puppeteer inside hosting environments (Docker, Render, AWS)
         browser = await puppeteer.launch({
             headless: true,
+            executablePath: '/usr/bin/google-chrome', // Specifically for Render
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
