@@ -1,10 +1,10 @@
 {
   "name": "moviee-stream-extractor",
   "version": "1.0.0",
-  "description": "Headless stream extractor for moviee",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "render-build": "./render-build.sh"
   },
   "dependencies": {
     "cors": "^2.8.5",
